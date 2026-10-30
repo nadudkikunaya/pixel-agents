@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as http from 'http';
+import * as https from 'https';
 import * as os from 'os';
 import * as path from 'path';
 
@@ -9,6 +10,8 @@ import {
   SERVER_JSON_NAME,
   SERVERS_DIR,
 } from '../../../../constants.js';
+import type { RemoteConfig } from '../../../../remoteSession.js';
+import { describeProject, readRemoteConfig, sanitizeForRemote } from '../../../../remoteSession.js';
 import type { ServerConfig, ServerTarget } from '../../../../serverConfig.js';
 import { isServerConfig, isServerTarget } from '../../../../serverConfig.js';
 
@@ -148,6 +151,62 @@ function postToServer(
   });
 }
 
+/**
+ * POST a status-only copy of one hook event to the shared server named in
+ * ~/.pixel-agents/remote.json. Same best-effort contract as postToServer: any
+ * failure resolves quietly. Prompts, tool input, paths and commands are
+ * dropped by sanitizeForRemote and never leave this machine.
+ */
+function postRemote(
+  remote: RemoteConfig,
+  data: Record<string, unknown>,
+  eventName: string,
+  sid: string,
+): Promise<void> {
+  hookDebug(`POST-remote event=${eventName} sid=${sid} machine=${remote.machine}`);
+  return new Promise((resolve) => {
+    try {
+      const label =
+        remote.showProject && typeof data.cwd === 'string' ? describeProject(data.cwd) : undefined;
+      const body = JSON.stringify(sanitizeForRemote(data, remote.machine, label));
+      const url = new URL(`${remote.url}${HOOK_API_PREFIX}/claude`);
+      const client = url.protocol === 'https:' ? https : http;
+      const req = client.request(
+        url,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Content-Length': Buffer.byteLength(body),
+            Authorization: `Bearer ${remote.token}`,
+          },
+          timeout: 2000,
+        },
+        (res) => {
+          hookDebug(`POST-remote-done event=${eventName} sid=${sid} status=${res.statusCode}`);
+          res.resume();
+          resolve();
+        },
+      );
+      req.on('error', (err) => {
+        hookDebug(`POST-remote-error event=${eventName} sid=${sid} err=${err.message}`);
+        resolve();
+      });
+      req.on('timeout', () => {
+        hookDebug(`POST-remote-timeout event=${eventName} sid=${sid}`);
+        req.destroy();
+        resolve();
+      });
+      req.end(body);
+    } catch (err) {
+      hookDebug(
+        `POST-remote-error event=${eventName} sid=${sid} err=${err instanceof Error ? err.message : String(err)}`,
+      );
+      resolve();
+    }
+  });
+}
+
 async function main(): Promise<void> {
   let input = '';
   for await (const chunk of process.stdin) input += chunk;
@@ -166,6 +225,7 @@ async function main(): Promise<void> {
   // Multi-server fan-out (D4): deliver to every live server in the registry.
   // Falls back to the single legacy server.json when the registry has no live
   // entries -- e.g. a server on disk that predates the registry (A1/A2).
+  const remote = readRemoteConfig();
   let servers: ServerTarget[] = readRegistry();
   if (servers.length === 0) {
     try {
@@ -176,9 +236,10 @@ async function main(): Promise<void> {
       servers = [legacy];
     } catch (e) {
       hookDebug(
-        `exit reason=no-server-json event=${eventName} sid=${sid} path=${SERVER_JSON} err=${e instanceof Error ? e.message : String(e)}`,
+        `no-local-server event=${eventName} sid=${sid} path=${SERVER_JSON} err=${e instanceof Error ? e.message : String(e)}`,
       );
-      process.exit(0);
+      // A machine with only a remote target still has someone to tell.
+      if (!remote) process.exit(0);
     }
   }
 
@@ -190,7 +251,10 @@ async function main(): Promise<void> {
   }
 
   const body = JSON.stringify(data);
-  await Promise.all(servers.map((server) => postToServer(server, body, eventName, sid)));
+  await Promise.all([
+    ...servers.map((server) => postToServer(server, body, eventName, sid)),
+    ...(remote ? [postRemote(remote, data, eventName, sid)] : []),
+  ]);
 }
 
 main()

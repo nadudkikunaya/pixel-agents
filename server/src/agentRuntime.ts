@@ -38,6 +38,7 @@ import type { HookEvent } from './hookEventHandler.js';
 import { HookEventHandler } from './hookEventHandler.js';
 import { assignPaletteIfNeeded } from './paletteAssigner.js';
 import { PathSet, pathsMatch } from './pathKey.js';
+import { isRemoteProjectDir, REMOTE_REST_MS } from './remoteSession.js';
 import { SessionRouter } from './sessionRouter.js';
 import { SubagentWatch } from './subagentWatch.js';
 import { cancelPermissionTimer, cancelWaitingTimer } from './timerManager.js';
@@ -62,6 +63,8 @@ export class AgentRuntime {
   readonly fileWatchers = new Map<number, fs.FSWatcher>();
   readonly pollingTimers = new Map<number, ReturnType<typeof setInterval>>();
   readonly waitingTimers = new Map<number, ReturnType<typeof setTimeout>>();
+  /** Pending removals of resting remote agents (see scheduleRemoteRemoval). */
+  private readonly remoteRestTimers = new Map<number, ReturnType<typeof setTimeout>>();
   readonly permissionTimers = new Map<number, ReturnType<typeof setTimeout>>();
   readonly jsonlPollTimers = new Map<number, ReturnType<typeof setInterval>>();
 
@@ -192,7 +195,11 @@ export class AgentRuntime {
             }
           }
         }
-        if (!isTrackedProjectDir(projectDir) && !this.watchAllSessions.current) {
+        if (
+          !isTrackedProjectDir(projectDir) &&
+          !isRemoteProjectDir(projectDir) &&
+          !this.watchAllSessions.current
+        ) {
           console.log(
             `[Pixel Agents] Hook: external session ${sessionId.slice(0, 8)}... not adopted ` +
               `(project untracked, Watch All Sessions off)`,
@@ -273,11 +280,37 @@ export class AgentRuntime {
         // Unnamed background spawns die with their lead's session too.
         this.subagentWatch.removeByLead(agentId);
         if (agent.isExternal) {
+          // A finished remote session rests in the office for a while instead of
+          // vanishing the moment Claude exits; it wakes up again on new events.
+          if (agent.hooksOnly && isRemoteProjectDir(agent.projectDir)) {
+            this.scheduleRemoteRemoval(agentId);
+            return;
+          }
           this.unregisterAgent(agent.sessionId);
           this.removeAgent(agentId);
         }
       },
     });
+  }
+
+  /** Remove a resting remote agent once it has been silent for REMOTE_REST_MS. */
+  private scheduleRemoteRemoval(agentId: number): void {
+    clearTimeout(this.remoteRestTimers.get(agentId));
+    const timer = setTimeout(() => {
+      this.remoteRestTimers.delete(agentId);
+      const agent = this.store.get(agentId);
+      if (!agent) return;
+      const silentFor = Date.now() - agent.lastDataAt;
+      if (silentFor < REMOTE_REST_MS) {
+        // Woke up in the meantime: check again once the full rest has passed.
+        this.scheduleRemoteRemoval(agentId);
+        return;
+      }
+      this.unregisterAgent(agent.sessionId);
+      this.removeAgent(agentId);
+    }, REMOTE_REST_MS);
+    timer.unref?.();
+    this.remoteRestTimers.set(agentId, timer);
   }
 
   /** Register adapter-specific lifecycle callbacks. */

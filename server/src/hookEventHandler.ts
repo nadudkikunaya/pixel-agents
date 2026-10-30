@@ -321,6 +321,13 @@ export class HookEventHandler {
         `[Pixel Agents] Hook: Agent ${agentId} - ${eventName} (session=${event.session_id.slice(0, 8)}...)`,
       );
 
+    // Remote sessions have no transcript to age, so their last hook event is their
+    // last sign of life (it decides when a resting agent may leave).
+    if (agent.hooksOnly) agent.lastDataAt = Date.now();
+    if (agent.hooksOnly && this.handleHooksOnlySubagentTool(event, normEvent, agent, agentId)) {
+      return;
+    }
+
     // Dispatch on normalized AgentEvent.kind, not raw hook event names.
     // The TeammateIdle / TaskCompleted hooks normalize to `subagentTurnEnd` -- both
     // retain their raw payload for the team-routing handler's identity extraction.
@@ -360,6 +367,75 @@ export class HookEventHandler {
         // Not yet consumed by the office visualization. Silently drop.
         return;
     }
+  }
+
+  /**
+   * Hooks-only agents (remote machines) have no JSONL to supply the Task/Agent tool id,
+   * so each Task/Agent PreToolUse is itself the sub-agent: it spawns a child character
+   * keyed by tool_use_id, and the matching PostToolUse removes it. Background spawns
+   * outlive their PostToolUse and are cleared when the turn ends (agentToolsClear).
+   * Returns true when the event was handled here.
+   */
+  private handleHooksOnlySubagentTool(
+    event: HookEvent,
+    normEvent: AgentEvent,
+    agent: AgentState,
+    agentId: number,
+  ): boolean {
+    if (normEvent.kind !== 'toolStart' && normEvent.kind !== 'toolEnd') return false;
+    const toolName = typeof event.tool_name === 'string' ? event.tool_name : '';
+    if (!this.getSubagentToolSet().has(toolName)) return false;
+    const toolId = typeof event.tool_use_id === 'string' ? event.tool_use_id : undefined;
+    const input = (event.tool_input as Record<string, unknown> | undefined) ?? {};
+    const runInBackground = input.run_in_background === true;
+
+    if (normEvent.kind === 'toolStart') {
+      cancelWaitingTimer(agentId, this.waitingTimers);
+      agent.isWaiting = false;
+      agent.permissionSent = false;
+      agent.hadToolsInTurn = true;
+      const subagentType = typeof input.subagent_type === 'string' ? input.subagent_type : '';
+      const startId = toolId ?? `hook-${Date.now()}`;
+      const status = subagentType ? `Subtask: ${subagentType}` : 'Subtask';
+      // Remember the open tool so a viewer who joins later gets it replayed
+      // (resendAgentActivity reads these maps).
+      this.rememberOpenTool(agent, startId, status, toolName);
+      this.agents.broadcast({
+        type: 'agentToolStart',
+        id: agentId,
+        toolId: startId,
+        status,
+        toolName,
+        runInBackground,
+      });
+      this.agents.broadcast({ type: 'agentStatus', id: agentId, status: 'active' });
+      return true;
+    }
+
+    // toolEnd: without a tool_use_id there is nothing to match, so fall through.
+    if (!toolId) return false;
+    if (!runInBackground) this.forgetOpenTool(agent, toolId);
+    this.agents.broadcast({ type: 'agentToolDone', id: agentId, toolId });
+    if (!runInBackground) {
+      this.agents.broadcast({ type: 'subagentClear', id: agentId, parentToolId: toolId });
+    }
+    return true;
+  }
+
+  /** Hooks-only agents have no transcript to rebuild open tools from, so the open
+   *  tool list lives on the AgentState for late-joining viewers. */
+  private rememberOpenTool(agent: AgentState, toolId: string, status: string, toolName: string) {
+    if (!agent.hooksOnly) return;
+    agent.activeToolIds.add(toolId);
+    agent.activeToolStatuses.set(toolId, status);
+    agent.activeToolNames.set(toolId, toolName);
+  }
+
+  private forgetOpenTool(agent: AgentState, toolId: string): void {
+    if (!agent.hooksOnly) return;
+    agent.activeToolIds.delete(toolId);
+    agent.activeToolStatuses.delete(toolId);
+    agent.activeToolNames.delete(toolId);
   }
 
   /**
@@ -443,6 +519,7 @@ export class HookEventHandler {
     // can find and remove them. JSONL handles agentToolStart (with runInBackground)
     // for these tools.
     if (toolName !== 'Task' && toolName !== 'Agent') {
+      this.rememberOpenTool(agent, hookToolId, status, toolName);
       this.agents.broadcast({
         type: 'agentToolStart',
         id: agentId,
@@ -465,6 +542,7 @@ export class HookEventHandler {
    */
   private handlePostToolUse(agent: AgentState, agentId: number): void {
     if (agent.currentHookToolId) {
+      this.forgetOpenTool(agent, agent.currentHookToolId);
       // Suppress tool display when lead has inline teammates (see handlePreToolUse)
       if (!hasInlineTeammates(agentId, this.agents)) {
         this.agents.broadcast({

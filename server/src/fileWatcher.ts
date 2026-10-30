@@ -46,6 +46,7 @@ import { seedContextUsage } from './contextUsage.js';
 import type { DismissalTracker } from './dismissalTracker.js';
 import { assignPaletteIfNeeded } from './paletteAssigner.js';
 import { pathsMatch } from './pathKey.js';
+import { parseRemoteProjectDir } from './remoteSession.js';
 import type { SubagentWatch } from './subagentWatch.js';
 import { cancelPermissionTimer, cancelWaitingTimer, clearAgentActivity } from './timerManager.js';
 import { getHookProvider, processTranscriptLine } from './transcriptParser.js';
@@ -1069,8 +1070,12 @@ export function adoptExternalSessionFromHook(
   } else {
     // Hooks-only provider (OpenCode, Copilot): no transcript file, all state from hooks
     const id = nextAgentIdRef.current++;
-    const directoryName =
-      directoryNameResolver?.({ cwd }) ?? (cwd ? path.basename(cwd) : undefined);
+    // A session from another machine arrives under a synthetic dir that carries the
+    // person (shown as the top line, via agentName) and an optional repo@branch label.
+    const remote = parseRemoteProjectDir(cwd);
+    const directoryName = remote
+      ? remote.label
+      : (directoryNameResolver?.({ cwd }) ?? (cwd ? path.basename(cwd) : undefined));
     const agent = createAgentState({
       id,
       sessionId,
@@ -1081,9 +1086,13 @@ export function adoptExternalSessionFromHook(
       hooksOnly: true,
       lastDataAt: Date.now(),
       directoryName,
+      agentName: remote?.person,
     });
     assignPaletteIfNeeded(agent, agents);
     agents.set(id, agent);
+    if (remote) {
+      agents.broadcast({ type: 'agentTeamInfo', id, agentName: remote.person });
+    }
     persistAgents();
     if (debug) {
       console.log(

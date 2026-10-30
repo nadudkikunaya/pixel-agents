@@ -198,8 +198,9 @@ export function ToolOverlay({
         }
 
         // Only show the label for hovered or selected agents (unless
-        // always-show is on) — the bubble renders regardless.
-        if (!alwaysShowOverlay && !isSelected && !isHovered) {
+        // always-show is on) — the bubble renders regardless. Sub-agent clones
+        // stay hover-only: ten of them pile identical labels on one spot.
+        if ((!alwaysShowOverlay || isSub) && !isSelected && !isHovered) {
           return bubbleNode && <Fragment key={id}>{bubbleNode}</Fragment>;
         }
 

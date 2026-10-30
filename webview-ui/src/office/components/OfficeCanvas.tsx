@@ -90,6 +90,10 @@ export function OfficeCanvas({
   // Middle-mouse pan state (imperative, no re-renders)
   const isPanningRef = useRef(false);
   const panStartRef = useRef({ mouseX: 0, mouseY: 0, panX: 0, panY: 0 });
+  // Figma-style: hold Space and drag with the left button to pan
+  const spaceHeldRef = useRef(false);
+  // A Space-drag ends in a click event; swallow it so it doesn't select anything
+  const suppressClickRef = useRef(false);
   // Delete/rotate button bounds (updated each frame by renderer)
   const deleteButtonBoundsRef = useRef<DeleteButtonBounds | null>(null);
   const rotateButtonBoundsRef = useRef<RotateButtonBounds | null>(null);
@@ -313,6 +317,11 @@ export function OfficeCanvas({
         panRef.current = clampPan(panStartRef.current.panX + dx, panStartRef.current.panY + dy);
         return;
       }
+      if (spaceHeldRef.current) {
+        const canvas = canvasRef.current;
+        if (canvas) canvas.style.cursor = 'grab';
+        return;
+      }
 
       if (isEditMode) {
         const tile = screenToTile(e.clientX, e.clientY);
@@ -451,8 +460,8 @@ export function OfficeCanvas({
   const handleMouseDown = useCallback(
     (e: React.MouseEvent) => {
       unlockAudio();
-      // Middle mouse button (button 1) starts panning
-      if (e.button === 1) {
+      // Middle mouse button (button 1), or left button while Space is held, starts panning
+      if (e.button === 1 || (e.button === 0 && spaceHeldRef.current)) {
         e.preventDefault();
         // Break camera follow + greeter centering on manual pan
         officeState.breakCameraFollow();
@@ -553,10 +562,17 @@ export function OfficeCanvas({
 
   const handleMouseUp = useCallback(
     (e: React.MouseEvent) => {
-      if (e.button === 1) {
+      if (e.button === 1 || (e.button === 0 && isPanningRef.current)) {
+        if (e.button === 0) suppressClickRef.current = true;
         isPanningRef.current = false;
         const canvas = canvasRef.current;
-        if (canvas) canvas.style.cursor = isEditMode ? 'crosshair' : 'default';
+        if (canvas) {
+          canvas.style.cursor = spaceHeldRef.current
+            ? 'grab'
+            : isEditMode
+              ? 'crosshair'
+              : 'default';
+        }
         return;
       }
       if (e.button === 2) {
@@ -689,6 +705,10 @@ export function OfficeCanvas({
 
   const handleClick = useCallback(
     (e: React.MouseEvent) => {
+      if (suppressClickRef.current) {
+        suppressClickRef.current = false;
+        return;
+      }
       if (isEditMode) return; // handled by mouseDown/mouseUp
       performTap(e.clientX, e.clientY);
     },
@@ -769,10 +789,11 @@ export function OfficeCanvas({
         // Pan via trackpad two-finger scroll or mouse wheel
         const dpr = window.devicePixelRatio || 1;
         officeState.breakCameraFollow();
-        panRef.current = clampPan(
-          panRef.current.x - e.deltaX * dpr,
-          panRef.current.y - e.deltaY * dpr,
-        );
+        // Shift + wheel scrolls sideways (some browsers already swap the axes)
+        const sideways = e.shiftKey && e.deltaX === 0;
+        const dx = sideways ? e.deltaY : e.deltaX;
+        const dy = sideways ? 0 : e.deltaY;
+        panRef.current = clampPan(panRef.current.x - dx * dpr, panRef.current.y - dy * dpr);
       }
     },
     [zoom, onZoomChange, officeState, panRef, clampPan],
@@ -786,6 +807,41 @@ export function OfficeCanvas({
     canvas.addEventListener('wheel', handleWheel, { passive: false });
     return () => canvas.removeEventListener('wheel', handleWheel);
   }, [handleWheel]);
+
+  // Space held = pan mode. Ignored while typing in a field, and cleared when the
+  // window loses focus (keyup never arrives then).
+  useEffect(() => {
+    const isTyping = (t: EventTarget | null) =>
+      t instanceof HTMLElement &&
+      (t.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(t.tagName));
+    const setCursor = (cursor: string) => {
+      const canvas = canvasRef.current;
+      if (canvas && !isPanningRef.current) canvas.style.cursor = cursor;
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.code !== 'Space' || isTyping(e.target)) return;
+      e.preventDefault(); // no page scroll, no activating a focused button
+      if (spaceHeldRef.current) return;
+      spaceHeldRef.current = true;
+      setCursor('grab');
+    };
+    const release = () => {
+      if (!spaceHeldRef.current) return;
+      spaceHeldRef.current = false;
+      setCursor(isEditMode ? 'crosshair' : 'default');
+    };
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.code === 'Space') release();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
+    window.addEventListener('blur', release);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keyup', onKeyUp);
+      window.removeEventListener('blur', release);
+    };
+  }, [isEditMode]);
 
   // Touch: one-finger pan, two-finger pinch zoom, short tap = click.
   useCanvasTouchGestures({
