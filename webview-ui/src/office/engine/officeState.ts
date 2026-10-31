@@ -732,19 +732,28 @@ export class OfficeState {
     const palette = parentCh ? parentCh.palette : 0;
     const hueShift = parentCh ? parentCh.hueShift : 0;
 
-    // Find the closest walkable tile to the parent, avoiding tiles occupied by other characters
+    // Sit at the free seat closest to the parent, so ten parallel sub-agents fill the
+    // desks around it instead of piling onto the walkable tiles. With no free seat,
+    // stand on the closest free walkable tile, avoiding tiles occupied by other characters.
     const parentCol = parentCh ? parentCh.tileCol : 0;
     const parentRow = parentCh ? parentCh.tileRow : 0;
-    let spawn = { col: parentCol, row: parentRow };
-    if (this.walkableTiles.length > 0) {
-      spawn = this.closestFreeWalkableTile(parentCol, parentRow) ?? this.walkableTiles[0];
+    const seatId = closestFreeSeat(this.seats, parentCol, parentRow);
+    let ch: Character;
+    if (seatId) {
+      const seat = this.seats.get(seatId)!;
+      seat.assigned = true;
+      ch = createCharacter(id, palette, seatId, seat, hueShift);
+    } else {
+      let spawn = { col: parentCol, row: parentRow };
+      if (this.walkableTiles.length > 0) {
+        spawn = this.closestFreeWalkableTile(parentCol, parentRow) ?? this.walkableTiles[0];
+      }
+      ch = createCharacter(id, palette, null, null, hueShift);
+      ch.x = spawn.col * TILE_SIZE + TILE_SIZE / 2;
+      ch.y = spawn.row * TILE_SIZE + TILE_SIZE / 2;
+      ch.tileCol = spawn.col;
+      ch.tileRow = spawn.row;
     }
-
-    const ch = createCharacter(id, palette, null, null, hueShift);
-    ch.x = spawn.col * TILE_SIZE + TILE_SIZE / 2;
-    ch.y = spawn.row * TILE_SIZE + TILE_SIZE / 2;
-    ch.tileCol = spawn.col;
-    ch.tileRow = spawn.row;
     // Face the same direction as the parent agent
     if (parentCh) ch.dir = parentCh.dir;
     ch.isSubagent = true;
