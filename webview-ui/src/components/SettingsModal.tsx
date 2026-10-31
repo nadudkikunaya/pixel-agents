@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react';
 
-import { isSoundEnabled, setSoundEnabled } from '../notificationSound.js';
+import { useSoundEnabled } from '../hooks/useSoundEnabled.js';
+import { setViewerSoundEnabled } from '../notificationSound.js';
 import { isBrowserRuntime } from '../runtime.js';
 import { transport } from '../transport/index.js';
 import { Button } from './ui/Button.js';
@@ -68,7 +69,7 @@ export function SettingsModal({
   onExportLayout,
   onImportLayout,
 }: SettingsModalProps) {
-  const [soundLocal, setSoundLocal] = useState(isSoundEnabled);
+  const soundEnabled = useSoundEnabled();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [assetDirDraft, setAssetDirDraft] = useState('');
 
@@ -181,12 +182,12 @@ export function SettingsModal({
       ))}
       <Checkbox
         label="Sound Notifications"
-        checked={soundLocal}
+        checked={soundEnabled}
         onChange={() => {
-          const newVal = !isSoundEnabled();
-          setSoundEnabled(newVal);
-          setSoundLocal(newVal);
-          transport.send({ type: 'setSoundEnabled', enabled: newVal });
+          const newVal = !soundEnabled;
+          setViewerSoundEnabled(newVal);
+          // On the web the choice is per viewer; only the VS Code host keeps it server-side.
+          if (!isBrowserRuntime) transport.send({ type: 'setSoundEnabled', enabled: newVal });
         }}
       />
       <Checkbox

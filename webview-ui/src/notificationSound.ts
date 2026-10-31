@@ -13,8 +13,12 @@ import {
   PERMISSION_VOLUME,
 } from './constants.js';
 import { isE2E } from './runtime.js';
+import { createSoundPreference } from './soundPreference.js';
 
-let soundEnabled = true;
+const preference = createSoundPreference({
+  getItem: (key) => localStorage.getItem(key),
+  setItem: (key, value) => localStorage.setItem(key, value),
+});
 let audioCtx: AudioContext | null = null;
 
 /** E2E test hook: append every (attempted) sound invocation to a window-side log
@@ -31,13 +35,22 @@ function recordSoundForTests(kind: 'done' | 'permission'): void {
   window.__pixelAgentsTestHooks.playedSounds.push({ kind, at: Date.now() });
 }
 
+/** Apply the server-side default; the viewer's own choice, if any, wins. */
 export function setSoundEnabled(enabled: boolean): void {
-  soundEnabled = enabled;
+  preference.applyServerDefault(enabled);
+}
+
+/** The viewer flipped the mute button or the settings checkbox. */
+export function setViewerSoundEnabled(enabled: boolean): void {
+  preference.setViewerChoice(enabled);
+  if (enabled) playPreviewBlip();
 }
 
 export function isSoundEnabled(): boolean {
-  return soundEnabled;
+  return preference.isEnabled();
 }
+
+export const subscribeSound = preference.subscribe;
 
 function playNote(
   ctx: AudioContext,
@@ -65,7 +78,7 @@ function playNote(
 
 export async function playDoneSound(): Promise<void> {
   recordSoundForTests('done');
-  if (!soundEnabled) return;
+  if (!preference.isEnabled()) return;
   try {
     if (!audioCtx) {
       audioCtx = new AudioContext();
@@ -84,7 +97,7 @@ export async function playDoneSound(): Promise<void> {
 
 export async function playPermissionSound(): Promise<void> {
   recordSoundForTests('permission');
-  if (!soundEnabled) return;
+  if (!preference.isEnabled()) return;
   try {
     if (!audioCtx) {
       audioCtx = new AudioContext();
@@ -107,6 +120,17 @@ export async function playPermissionSound(): Promise<void> {
       PERMISSION_NOTE_DURATION_SEC,
       PERMISSION_VOLUME,
     );
+  } catch {
+    // Audio may not be available
+  }
+}
+
+/** One short note on unmute: proves sound works, and the click unlocks the AudioContext. */
+function playPreviewBlip(): void {
+  try {
+    if (!audioCtx) audioCtx = new AudioContext();
+    if (audioCtx.state === 'suspended') void audioCtx.resume();
+    playNote(audioCtx, NOTIFICATION_NOTE_1_HZ, 0);
   } catch {
     // Audio may not be available
   }

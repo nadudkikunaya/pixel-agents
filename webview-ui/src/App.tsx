@@ -11,6 +11,7 @@ import { EditActionBar } from './components/EditActionBar.js';
 import { IntroBubble } from './components/IntroBubble.js';
 import { MigrationNotice } from './components/MigrationNotice.js';
 import { SettingsModal } from './components/SettingsModal.js';
+import { SoundToggle } from './components/SoundToggle.js';
 import { TerminalDrawer } from './components/TerminalDrawer.js';
 import { Tooltip } from './components/Tooltip.js';
 import { Button } from './components/ui/Button.js';
@@ -497,6 +498,7 @@ function App() {
           {/* Mobile: pinch replaces the zoom buttons, and the toolbar's
                 jobs move to the card bar (+) and the floating Settings button. */}
           {!isMobile && <ZoomControls zoom={editor.zoom} onZoomChange={editor.handleZoomChange} />}
+          {!isMobile && <SoundToggle className="top-100 left-8" />}
 
           {/* Vignette overlay */}
           <div
@@ -657,6 +659,11 @@ function App() {
             Settings
           </Button>
         </div>
+      )}
+
+      {/* Mobile: beside Settings, outside the sliding office/terminal track so it never slides away. */}
+      {isMobile && !isDebugMode && (
+        <SoundToggle className={`mobile-safe-top ${officeReadOnly ? 'left-8' : 'left-88'}`} />
       )}
 
       <VersionIndicator
