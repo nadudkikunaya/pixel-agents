@@ -3,6 +3,7 @@ import * as path from 'path';
 import type { AgentEvent, HookProvider } from '../../core/src/provider.js';
 import type { AgentStateStore } from './agentStateStore.js';
 import { SESSION_END_GRACE_MS } from './constants.js';
+import { isRemoteProjectDir } from './remoteSession.js';
 import type { SessionRouter } from './sessionRouter.js';
 import { getInlineTeammates, hasInlineTeammates, hasPromotedBackgroundAgent } from './teamUtils.js';
 import { cancelPermissionTimer, cancelWaitingTimer } from './timerManager.js';
@@ -290,6 +291,18 @@ export class HookEventHandler {
           break;
         }
       }
+    }
+    // A remote session that began before this server did (restart, redeploy) never sends
+    // SessionStart again, so adopt it on any event but its goodbye.
+    const remoteCwd = event.cwd;
+    if (
+      agentId === undefined &&
+      normEvent.kind !== 'sessionEnd' &&
+      typeof remoteCwd === 'string' &&
+      isRemoteProjectDir(remoteCwd)
+    ) {
+      this.lifecycleCallbacks.onExternalSessionDetected?.(event.session_id, undefined, remoteCwd);
+      agentId = this.sessionRouter.resolve(event.session_id);
     }
     if (agentId === undefined) {
       // Buffer if: pending external session, already buffering for this session,

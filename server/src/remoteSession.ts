@@ -12,6 +12,13 @@ export const REMOTE_PROJECT_PREFIX = '/pixel-agents-remote';
 /** How long a finished remote session rests in the office before it leaves. */
 export const REMOTE_REST_MS = 15 * 60 * 1000;
 
+/** A remote session that sends nothing for this long is gone (closed terminal, sleeping
+ *  laptop, killed VM never send SessionEnd). It comes back by itself on its next event. */
+export const REMOTE_STALE_MS = 3 * 60 * 60 * 1000;
+
+/** How often the runtime looks for silent remote sessions. */
+export const REMOTE_SWEEP_MS = 5 * 60 * 1000;
+
 /** File under ~/.pixel-agents/ that points a machine's hook at a shared server. */
 export const REMOTE_CONFIG_NAME = 'remote.json';
 

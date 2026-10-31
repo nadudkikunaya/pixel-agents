@@ -38,7 +38,12 @@ import type { HookEvent } from './hookEventHandler.js';
 import { HookEventHandler } from './hookEventHandler.js';
 import { assignPaletteIfNeeded } from './paletteAssigner.js';
 import { PathSet, pathsMatch } from './pathKey.js';
-import { isRemoteProjectDir, REMOTE_REST_MS } from './remoteSession.js';
+import {
+  isRemoteProjectDir,
+  REMOTE_REST_MS,
+  REMOTE_STALE_MS,
+  REMOTE_SWEEP_MS,
+} from './remoteSession.js';
 import { SessionRouter } from './sessionRouter.js';
 import { SubagentWatch } from './subagentWatch.js';
 import { cancelPermissionTimer, cancelWaitingTimer } from './timerManager.js';
@@ -76,6 +81,7 @@ export class AgentRuntime {
   readonly activeAgentId = { current: null as number | null };
   private externalScanTimer: ReturnType<typeof setInterval> | null = null;
   private staleCheckTimer: ReturnType<typeof setInterval> | null = null;
+  private remoteSweepTimer: ReturnType<typeof setInterval> | null = null;
 
   // Configuration refs (mutable, shared with scanners)
   readonly watchAllSessions = { current: false };
@@ -293,6 +299,17 @@ export class AgentRuntime {
     });
   }
 
+  /** Remove remote agents that went silent without a SessionEnd. */
+  sweepStaleRemoteAgents(now = Date.now()): void {
+    for (const [id, agent] of [...this.store]) {
+      if (!agent.hooksOnly || !isRemoteProjectDir(agent.projectDir)) continue;
+      if (now - agent.lastDataAt < REMOTE_STALE_MS) continue;
+      console.log(`[Pixel Agents] Remote agent ${id} silent for a long while, removing`);
+      this.unregisterAgent(agent.sessionId);
+      this.removeAgent(id);
+    }
+  }
+
   /** Remove a resting remote agent once it has been silent for REMOTE_REST_MS. */
   private scheduleRemoteRemoval(agentId: number): void {
     clearTimeout(this.remoteRestTimers.get(agentId));
@@ -359,6 +376,8 @@ export class AgentRuntime {
     this.pollingTimers.delete(id);
 
     // Cancel timers
+    clearTimeout(this.remoteRestTimers.get(id));
+    this.remoteRestTimers.delete(id);
     cancelWaitingTimer(id, this.waitingTimers);
     cancelPermissionTimer(id, this.permissionTimers);
 
@@ -495,6 +514,8 @@ export class AgentRuntime {
       this.knownJsonlFiles,
       this.hooksEnabled,
     );
+    this.remoteSweepTimer = setInterval(() => this.sweepStaleRemoteAgents(), REMOTE_SWEEP_MS);
+    this.remoteSweepTimer.unref?.();
   }
 
   // ── Restore persisted external agents (standalone) ──
@@ -603,6 +624,10 @@ export class AgentRuntime {
     if (this.staleCheckTimer) {
       clearInterval(this.staleCheckTimer);
       this.staleCheckTimer = null;
+    }
+    if (this.remoteSweepTimer) {
+      clearInterval(this.remoteSweepTimer);
+      this.remoteSweepTimer = null;
     }
 
     for (const id of [...this.store.keys()]) {
