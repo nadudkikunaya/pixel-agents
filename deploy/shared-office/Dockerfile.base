@@ -1,0 +1,5 @@
+FROM node:22-alpine
+RUN npm install --global pixel-agents@1.5.0
+USER node
+ENV HOME=/home/node
+CMD ["pixel-agents","--host","127.0.0.1","--port","3150","--no-terminal"]

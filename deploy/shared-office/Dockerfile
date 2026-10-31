@@ -1,4 +1,6 @@
-FROM pixel-agents:1.5.0
+# BASE is the stock image built from Dockerfile.base; a previous build of this image works too.
+ARG BASE=pixel-agents:1.5.0
+FROM ${BASE}
 COPY cli.js /usr/local/lib/node_modules/pixel-agents/dist/cli.js
 COPY webview /usr/local/lib/node_modules/pixel-agents/dist/webview
 COPY office-assets /opt/office-assets

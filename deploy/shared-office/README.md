@@ -9,7 +9,9 @@ never leave the sender; the server only sees `person` and `repo@branch`.
 
 1. `npm run build` (repo root), then copy `dist/cli.js` and `dist/webview/`
    next to the `Dockerfile` in this folder, together with `office-assets/`.
-2. Build on top of the stock image: `docker build --network=host -t pixel-agents:remote .`
+2. Build the stock image once (`docker build --network=host -f Dockerfile.base -t pixel-agents:1.5.0 .`), then
+   build on top of it: `docker build --network=host -t pixel-agents:remote .`
+   (If the stock tag was pruned, pass an earlier build instead: `--build-arg BASE=<earlier image>`.)
 3. Run it behind your proxy, with the data volume holding `config.json`
    (external assets + `alwaysShowLabels`), `layout.json` and the token:
    `docker run -d --name pixel-agents --network host --restart unless-stopped -v pixel-agents-data:/home/node/.pixel-agents pixel-agents:remote`
@@ -31,4 +33,7 @@ never leave the sender; the server only sees `person` and `repo@branch`.
    SubagentStart, SubagentStop, TeammateIdle, TaskCompleted:
    `{"matcher": "", "hooks": [{"type": "command", "command": "node \"$HOME/.pixel-agents/hooks/claude-hook.js\"", "timeout": 5}]}`
    (use the absolute path if your shell does not expand `$HOME` there).
+   Add `"async": true` to PreToolUse, PostToolUse and PostToolUseFailure so Claude never
+   waits on the network for each tool call. Keep the rest synchronous: a background hook
+   can be cut off when Claude exits, and SessionEnd must arrive.
 4. Restart open Claude sessions; new ones report automatically.
